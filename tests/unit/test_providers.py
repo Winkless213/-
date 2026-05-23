@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
@@ -110,3 +110,50 @@ class TestChromaVectorStore:
 
         results = store.search([2.0], top_k=1)
         assert results[0]["text"] == "new"
+
+
+class TestMIMOLLM:
+    @pytest.mark.asyncio
+    @patch("app.providers.llm_mimo.openai.AsyncOpenAI")
+    async def test_chat_sync_returns_text(self, mock_cls):
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=MagicMock(content="Hello world"))]
+        mock_response.usage = MagicMock(prompt_tokens=10, completion_tokens=5)
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+        mock_cls.return_value = mock_client
+
+        from app.providers.llm_mimo import MIMOLLM
+
+        llm = MIMOLLM(api_key="test", endpoint="https://test.com/v1", model="test")
+        llm.client = mock_client
+
+        result = await llm.chat_sync([{"role": "user", "content": "hi"}])
+        assert result == "Hello world"
+
+    @pytest.mark.asyncio
+    @patch("app.providers.llm_mimo.openai.AsyncOpenAI")
+    async def test_chat_stream_yields_deltas(self, mock_cls):
+        async def fake_stream():
+            chunks = [
+                MagicMock(choices=[MagicMock(delta=MagicMock(content="Hel"))], usage=None),
+                MagicMock(choices=[MagicMock(delta=MagicMock(content="lo"))], usage=None),
+                MagicMock(choices=[MagicMock(delta=MagicMock(content=None))], usage=None),
+            ]
+            for c in chunks:
+                yield c
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(return_value=fake_stream())
+        mock_cls.return_value = mock_client
+
+        from app.providers.llm_mimo import MIMOLLM
+
+        llm = MIMOLLM(api_key="test", endpoint="https://test.com/v1", model="test")
+        llm.client = mock_client
+
+        tokens = []
+        async for delta in llm.chat_stream([{"role": "user", "content": "hi"}]):
+            tokens.append(delta)
+
+        assert tokens == ["Hel", "lo"]
